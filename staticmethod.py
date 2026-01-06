@@ -5,4 +5,4 @@ class A:
         color='red'
         brand='GMC'
 c=A()
-c.wheels
+print(c.wheels)
