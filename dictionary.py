@@ -1,0 +1,11 @@
+a={"EventDate":"21/11/2025","surveyid":"1073365","surveytype":"service","SurveyVersion":"2","Brand":"cadillac","Model":"Tahoe","Dealer":"Binhamoodah.","City":"Hubtowns"}
+EventDate=a.get('EventDate')
+print('EventDate',EventDate)
+print('surveyid', a['surveyid'])
+print(a['surveyid'])
+print(a['surveytype'])
+print(a['SurveyVersion'])
+print(a['Brand'])
+print(a['Model'])
+print(a['Dealer'])
+print(a.get('City'))
