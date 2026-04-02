@@ -1,0 +1,208 @@
+import mysql.connector
+import time
+import json
+import os
+import logging
+from datetime import datetime, date
+import win32com.client as win32
+
+# ---------------------------
+# DATABASE CONFIGURATION
+# ---------------------------
+db_config = {
+    "host": "20.233.62.109",
+    "user": "wasupport",
+    "password": "35g1waUV95R6",
+    "database": "whatsapp",
+    "port": 4566
+}
+
+# ---------------------------
+# SETTINGS
+# ---------------------------
+CHECK_INTERVAL_SECONDS = 600   # 10 minutes
+STATE_FILE = "failure_state.json"
+LOG_FILE = "failure_monitor.log"
+
+# ---------------------------
+# EMAIL SETTINGS
+# ---------------------------
+TO_EMAIL = "nadikatla.gopi@vectramind.com"
+CC_EMAIL = "prasadu.bonthu@vectramind.com"
+SUBJECT = "WhatsApp Failure Reason Alert"
+
+# ---------------------------
+# LOGGING
+# ---------------------------
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+# ---------------------------
+# SQL QUERY FUNCTION
+# ---------------------------
+def get_query():
+    today = date.today().strftime("%Y-%m-%d")
+
+    query = f"""
+    SELECT 
+        COUNT(mobile_no) AS failure_count,
+        COALESCE(w.failure_reason, 'UNKNOWN') AS failure_reason
+    FROM wa_message_cdr w
+    JOIN um_customer c ON w.customer_id = c.id
+    WHERE w.received_date BETWEEN '{today}' AND '{today}'
+      AND w.STATUS = 'Failure'
+    GROUP BY w.failure_reason
+    ORDER BY failure_count DESC;
+    """
+    return query
+
+# ---------------------------
+# FETCH DATA FROM MYSQL
+# ---------------------------
+def fetch_records():
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor(dictionary=True)
+
+        query = get_query()
+        cursor.execute(query)
+        records = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        return records
+
+    except Exception as e:
+        logging.exception("Database fetch failed")
+        print("Database fetch failed:", e)
+        return []
+
+# ---------------------------
+# LOAD PREVIOUS STATE
+# ---------------------------
+def load_previous_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+# ---------------------------
+# SAVE CURRENT STATE
+# ---------------------------
+def save_current_state(records):
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=4)
+    except Exception as e:
+        logging.exception("Failed to save state")
+        print("Failed to save state:", e)
+
+# ---------------------------
+# COMPARE OLD VS NEW
+# ---------------------------
+def has_data_changed(old_records, new_records):
+    old_sorted = sorted(old_records, key=lambda x: x["failure_reason"])
+    new_sorted = sorted(new_records, key=lambda x: x["failure_reason"])
+    return old_sorted != new_sorted
+
+# ---------------------------
+# BUILD EMAIL BODY
+# ---------------------------
+def build_email_body(records):
+    body = []
+    body.append("Hi Team,\n")
+    body.append("Please find the latest WhatsApp failure reasons summary below:\n")
+
+    total_failures = sum(int(r["failure_count"]) for r in records)
+    body.append(f"Total Failures Today: {total_failures}\n")
+
+    body.append("Failure Summary:\n")
+    body.append("-" * 60)
+
+    for rec in records:
+        failure_reason = rec.get("failure_reason", "UNKNOWN")
+        failure_count = rec.get("failure_count", 0)
+
+        body.append(f"\nFailure Reason : {failure_reason}")
+        body.append(f"Failure Count  : {failure_count}")
+        body.append("-" * 60)
+
+    body.append(f"\nReport Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    body.append("\nRegards,\nGopi")
+
+    return "\n".join(body)
+
+# ---------------------------
+# SEND EMAIL USING OUTLOOK
+# ---------------------------
+def send_email_outlook(body_text):
+    try:
+        outlook = win32.Dispatch("Outlook.Application")
+        mail = outlook.CreateItem(0)
+
+        mail.To = TO_EMAIL
+        mail.CC = CC_EMAIL
+        mail.Subject = SUBJECT
+        mail.Body = body_text
+
+        # Send directly
+        mail.Send()
+
+        print("Email sent successfully.")
+        logging.info("Email sent successfully.")
+
+    except Exception as e:
+        print("Failed to send email:", e)
+        logging.exception("Failed to send email")
+
+# ---------------------------
+# MAIN MONITOR LOOP
+# ---------------------------
+def main():
+    print("Starting WhatsApp Failure Monitor...")
+    logging.info("Failure Monitor Started")
+
+    while True:
+        try:
+            print(f"\nChecking failures at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+            logging.info("Checking failure records")
+
+            current_records = fetch_records()
+
+            if not current_records:
+                print("No failure records found.")
+                logging.info("No failure records found.")
+            else:
+                previous_records = load_previous_state()
+
+                if has_data_changed(previous_records, current_records):
+                    print("Change detected in failure records. Sending email...")
+                    logging.info("Change detected. Sending email.")
+
+                    email_body = build_email_body(current_records)
+                    send_email_outlook(email_body)
+
+                    save_current_state(current_records)
+                else:
+                    print("No change detected. No email sent.")
+                    logging.info("No change detected. No email sent.")
+
+        except Exception as e:
+            print("Unexpected error:", e)
+            logging.exception("Unexpected error in main loop")
+
+        print(f"Sleeping for {CHECK_INTERVAL_SECONDS // 60} minutes...\n")
+        time.sleep(CHECK_INTERVAL_SECONDS)
+
+# ---------------------------
+# ENTRY POINT
+# ---------------------------
+if __name__ == "__main__":
+    main()
